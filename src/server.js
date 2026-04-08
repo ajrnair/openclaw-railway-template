@@ -148,7 +148,9 @@ function isConfigured() {
   }
 }
 
+let allowedOriginsSynced = false;
 async function syncAllowedOrigins() {
+  if (allowedOriginsSynced) return;
   const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN;
   if (!publicDomain) return;
 
@@ -168,6 +170,7 @@ async function syncAllowedOrigins() {
   } else {
     log.warn("gateway", `failed to set allowedOrigins (exit=${result.code})`);
   }
+  allowedOriginsSynced = true;
 }
 
 let gatewayProc = null;
