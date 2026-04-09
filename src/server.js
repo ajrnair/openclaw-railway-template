@@ -176,6 +176,10 @@ async function syncAllowedOrigins() {
 let gatewayProc = null;
 let gatewayStarting = null;
 let shuttingDown = false;
+const RESTART_BASE_DELAY_MS = 2_000;
+const RESTART_MAX_DELAY_MS = 60_000;
+const RESTART_MAX_ATTEMPTS = 10;
+let _restartAttempts = 0;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -228,6 +232,18 @@ async function startGateway() {
     await sleep(1000);
   }
 
+  // Sync gateway token to config before spawning to prevent config reload loop.
+  // Without this, the gateway detects a mismatch between the CLI --token and
+  // gateway.auth.token in the config, triggering an infinite restart cycle.
+  // (Same as what the onboarding flow does at setup time.)
+  const tokenSyncResult = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]),
+  );
+  if (tokenSyncResult.code !== 0) {
+    log.warn("gateway", `failed to sync gateway token to config (exit=${tokenSyncResult.code})`);
+  }
+
   const args = [
     "gateway",
     "run",
@@ -267,15 +283,22 @@ async function startGateway() {
   gatewayProc.on("exit", (code, signal) => {
     log.error("gateway", `exited code=${code} signal=${signal}`);
     gatewayProc = null;
-    if (!shuttingDown && isConfigured()) {
-      log.info("gateway", "scheduling auto-restart in 2s...");
+    if (!shuttingDown && isConfigured() && _restartAttempts < RESTART_MAX_ATTEMPTS) {
+      _restartAttempts++;
+      const delay = Math.min(
+        RESTART_BASE_DELAY_MS * Math.pow(2, _restartAttempts - 1),
+        RESTART_MAX_DELAY_MS,
+      );
+      log.info("gateway", `scheduling auto-restart in ${delay / 1000}s (attempt ${_restartAttempts}/${RESTART_MAX_ATTEMPTS})...`);
       setTimeout(() => {
         if (!shuttingDown && !gatewayProc && isConfigured()) {
           ensureGatewayRunning().catch((err) => {
             log.error("gateway", `auto-restart failed: ${err.message}`);
           });
         }
-      }, 2000);
+      }, delay);
+    } else if (_restartAttempts >= RESTART_MAX_ATTEMPTS) {
+      log.error("gateway", `giving up after ${RESTART_MAX_ATTEMPTS} restart attempts`);
     }
   });
 }
@@ -291,6 +314,7 @@ async function ensureGatewayRunning() {
       if (!ready) {
         throw new Error("Gateway did not become ready in time");
       }
+      _restartAttempts = 0; // Reset backoff counter on successful start
     })().finally(() => {
       gatewayStarting = null;
     });
