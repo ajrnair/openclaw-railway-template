@@ -218,8 +218,15 @@ async function startGateway() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
 
-  const stopResult = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "stop"]));
-  log.info("gateway", `stop existing gateway exit=${stopResult.code}`);
+  if (!startGateway._hasRunOnce) {
+    const stopResult = await runCmd(OPENCLAW_NODE, clawArgs(["gateway", "stop"]));
+    log.info("gateway", `stop existing gateway exit=${stopResult.code}`);
+    await sleep(1000);
+    startGateway._hasRunOnce = true;
+  } else {
+    log.info("gateway", "restart cycle — skipping gateway stop (process already exited)");
+    await sleep(1000);
+  }
 
   const args = [
     "gateway",
